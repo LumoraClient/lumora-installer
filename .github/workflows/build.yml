@@ -1,0 +1,34 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  compile:
+    name: Compile setup (dummy launcher)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with a stand-in app image
+        shell: pwsh
+        run: |
+          $img = "$env:RUNNER_TEMP\img\LumoraLauncher"
+          New-Item -ItemType Directory -Force "$img\app" | Out-Null
+          Set-Content "$img\LumoraLauncher.exe" "stand-in"
+          '{"defaultProfile":"26.1.2","profiles":[{"id":"26.1.2","minecraftVersion":"26.1.2"},{"id":"1.8.9","minecraftVersion":"1.8.9"}]}' |
+            Set-Content "$env:RUNNER_TEMP\profiles.json"
+          powershell -ExecutionPolicy Bypass -File build.ps1 -AppImage $img -Profiles "$env:RUNNER_TEMP\profiles.json" `
+            -Version 0.0.0-ci -Out out\LumoraClient-Setup-ci.exe
+          if (-not (Test-Path out\LumoraClient-Setup-ci.exe)) { exit 1 }
+      - name: Silent install and uninstall (sandbox)
+        shell: pwsh
+        run: |
+          $env:LUMORA_HOME = "$env:RUNNER_TEMP\home"
+          $env:LUMORA_SETUP_SANDBOX = "1"
+          $dir = "$env:RUNNER_TEMP\app"
+          $p = Start-Process out\LumoraClient-Setup-ci.exe -ArgumentList "/S","--dir=$dir","--versions=1.8.9","--theme=vanilla" -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or -not (Test-Path "$dir\LumoraLauncher\LumoraLauncher.exe")) { Get-Content "$env:TEMP\LumoraSetup.log"; exit 1 }
+          if (-not (Select-String -Path "$env:LUMORA_HOME\config\setup.json" -Pattern '"theme":"vanilla"' -Quiet)) { exit 1 }
+          $p = Start-Process "$dir\Deinstallieren.exe" -ArgumentList "/S" -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or (Test-Path "$dir\LumoraLauncher")) { Get-Content "$env:TEMP\LumoraSetup.log"; exit 1 }
