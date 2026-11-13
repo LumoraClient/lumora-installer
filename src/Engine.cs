@@ -381,7 +381,8 @@ namespace Lumora.Setup
                         {
                             throw new SetupException("Ungültiger Eintrag im Setup: " + entry.FullName, false);
                         }
-                        if (entry.FullName.EndsWith("/"))
+                        // directory entries: "dir/" or, from ZipFile.CreateFromDirectory on .NET Framework, "dir\"
+                        if (entry.Name.Length == 0 || entry.FullName.EndsWith("/") || entry.FullName.EndsWith("\\"))
                         {
                             Directory.CreateDirectory(dest);
                             continue;
