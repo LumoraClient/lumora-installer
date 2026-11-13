@@ -2,33 +2,45 @@ name: build
 
 on:
   push:
+    branches: ['**']
+    tags: ['v*']
   pull_request:
 
 jobs:
-  compile:
-    name: Compile setup (dummy launcher)
+  setup:
+    name: Build and test the setup
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Build with a stand-in app image
+      - name: Build
         shell: pwsh
         run: |
-          $img = "$env:RUNNER_TEMP\img\LumoraLauncher"
-          New-Item -ItemType Directory -Force "$img\app" | Out-Null
-          Set-Content "$img\LumoraLauncher.exe" "stand-in"
-          '{"defaultProfile":"26.1.2","profiles":[{"id":"26.1.2","minecraftVersion":"26.1.2"},{"id":"1.8.9","minecraftVersion":"1.8.9"}]}' |
-            Set-Content "$env:RUNNER_TEMP\profiles.json"
-          powershell -ExecutionPolicy Bypass -File build.ps1 -AppImage $img -Profiles "$env:RUNNER_TEMP\profiles.json" `
-            -Version 0.0.0-ci -Out out\LumoraClient-Setup-ci.exe
-          if (-not (Test-Path out\LumoraClient-Setup-ci.exe)) { exit 1 }
-      - name: Silent install and uninstall (sandbox)
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { "0.0.0-$($env:GITHUB_SHA.Substring(0, 7))" }
+          powershell -ExecutionPolicy Bypass -File build.ps1 -Version $version -Out out\LumoraClient-Setup.exe
+          if (-not (Test-Path out\LumoraClient-Setup.exe)) { exit 1 }
+      - name: Install the newest launcher from GitHub (silent, sandbox) and uninstall
         shell: pwsh
         run: |
           $env:LUMORA_HOME = "$env:RUNNER_TEMP\home"
           $env:LUMORA_SETUP_SANDBOX = "1"
           $dir = "$env:RUNNER_TEMP\app"
-          $p = Start-Process out\LumoraClient-Setup-ci.exe -ArgumentList "/S","--dir=$dir","--versions=1.8.9","--theme=vanilla" -Wait -PassThru
+          $p = Start-Process out\LumoraClient-Setup.exe -ArgumentList "/S","--dir=$dir","--versions=26.1.2,1.8.9","--theme=vanilla" -Wait -PassThru
           if ($p.ExitCode -ne 0 -or -not (Test-Path "$dir\LumoraLauncher\LumoraLauncher.exe")) { Get-Content "$env:TEMP\LumoraSetup.log"; exit 1 }
           if (-not (Select-String -Path "$env:LUMORA_HOME\config\setup.json" -Pattern '"theme":"vanilla"' -Quiet)) { exit 1 }
           $p = Start-Process "$dir\Deinstallieren.exe" -ArgumentList "/S" -Wait -PassThru
           if ($p.ExitCode -ne 0 -or (Test-Path "$dir\LumoraLauncher")) { Get-Content "$env:TEMP\LumoraSetup.log"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LumoraClient-Setup
+          path: out/LumoraClient-Setup.exe
+      - name: Release (tags v*)
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $hash = (Get-FileHash out\LumoraClient-Setup.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  LumoraClient-Setup.exe" | Set-Content out\SHA256SUMS.txt -Encoding ascii
+          gh release create $env:GITHUB_REF_NAME out\LumoraClient-Setup.exe out\SHA256SUMS.txt --title "Lumora Setup $($env:GITHUB_REF_NAME.TrimStart('v'))" --generate-notes

@@ -1,9 +1,10 @@
 // Lumora Setup - entry point. One source, two programs:
-//   LumoraClient-Setup-<version>.exe  wizard with the launcher embedded (app.zip)
-//   Deinstallieren.exe                same window in uninstall mode (compiled with /define:UNINSTALLER)
+//   LumoraClient-Setup.exe   wizard; downloads the newest launcher from GitHub Releases (lumora-launcher)
+//   Deinstallieren.exe       same window in uninstall mode (compiled with /define:UNINSTALLER)
 //
 // Command line (both): /S or --silent runs without a window. Setup: --dir=<programm> --data=<spieldaten>
-// --versions=26.1.2,1.8.9 --theme=lumora|vanilla --download --no-desktop --no-startmenu --start.
+// --versions=26.1.2,1.8.9 --theme=lumora|vanilla --download --no-desktop --no-startmenu --start
+// --source=<LumoraClient.exe> (install from a local file, no download).
 // Uninstaller: --purge also deletes the game data. Exit code 0 = success. Log: %TEMP%\LumoraSetup.log
 using System;
 using System.Collections.Generic;
@@ -29,10 +30,20 @@ namespace Lumora.Setup
         private static readonly bool IsUninstaller = false;
 #endif
 
+        /// Version of this setup program (resource version.txt, set by build.ps1).
+        public static readonly string SetupVersion = (Res.Text("version.txt") ?? "dev").Trim();
+        /// --source=<LumoraClient.exe>: install from a local file instead of downloading from GitHub.
+        public static string Source;
+
         [STAThread]
         private static int Main(string[] args)
         {
             var a = new List<string>(args);
+            Source = Option(a, "--source");
+            if (Source != null)
+            {
+                Source = Path.GetFullPath(Source);
+            }
             bool silent = a.Any(x => x == "/S" || x == "/s" || x == "--silent");
             try
             {
@@ -144,8 +155,10 @@ namespace Lumora.Setup
         {
             Existing existing = Engine.Detect();
             string recommended;
-            List<Version> versions = Engine.Versions(out recommended);
+            List<Version> versions;
             var plan = new Plan();
+            plan.Source = Source;
+            plan.Release = Engine.Resolve(Source, out versions, out recommended);
             plan.AppDir = Option(a, "--dir") ?? existing.AppDir ?? Engine.DefaultAppDir;
             plan.DataDir = Option(a, "--data") ?? existing.DataDir ?? Engine.DefaultDataDir;
             string list = Option(a, "--versions");
@@ -162,7 +175,7 @@ namespace Lumora.Setup
             plan.Desktop = !a.Contains("--no-desktop") && (existing.Desktop ?? true);
             plan.StartMenu = !a.Contains("--no-startmenu") && (existing.StartMenu ?? true);
             plan.Autostart = existing.Autostart;
-            Log("Lumora Setup " + Engine.Version + " (still): " + plan.AppDir + ", Daten " + plan.DataDir + ", Versionen "
+            Log("Lumora Setup " + SetupVersion + ", Launcher " + Engine.Version + " (still): " + plan.AppDir + ", Daten " + plan.DataDir + ", Versionen "
                 + string.Join(",", plan.Profiles) + ", Design " + plan.Theme);
             Engine.Install(plan, new LogProgress(Engine.InstallSteps));
             if (a.Contains("--download"))

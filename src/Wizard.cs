@@ -26,8 +26,13 @@ namespace Lumora.Setup
         private readonly bool uninstall;
         private readonly Plan plan = new Plan();
         private readonly Existing existing;
-        private readonly List<Version> versions;
-        private readonly string recommended;
+        private List<Version> versions;
+        private string recommended;
+        // online lookup of the newest launcher release (GitHub) and its version list
+        private bool ready;
+        private string resolveError;
+        private TextBlock releaseChip;
+        private TextBlock sideVersion;
         private readonly string[] stepNames;
 
         private readonly Grid root = new Grid();
@@ -67,6 +72,15 @@ namespace Lumora.Setup
                 ? new[] { "Bestätigen", "Entfernen", "Fertig" }
                 : new[] { "Willkommen", "Versionen", "Speicherorte", "Design", "Installation", "Fertig" };
             Defaults();
+            plan.Source = Program.Source;
+            if (uninstall)
+            {
+                ready = true;
+            }
+            else
+            {
+                Resolve();
+            }
 
             Title = uninstall ? "Lumora Client deinstallieren" : "Lumora Client Setup";
             Width = 1000;
@@ -133,12 +147,13 @@ namespace Lumora.Setup
                     Go(index, 1);
                     if (index == 4 || (uninstall && index == 1))
                     {
-                        installRow(0, 2, null);
+                        installRow(0, 2, uninstall ? null : "74 MB");
                         installRow(1, 2, null);
                         installRow(2, uninstall ? 1 : 2, null);
                         if (!uninstall)
                         {
-                            installRow(3, 1, "1/2 · Minecraft 26.1.2");
+                            installRow(3, 2, null);
+                            installRow(4, 1, "1/2 · Minecraft 26.1.2");
                             skip.Visibility = Visibility.Visible;
                         }
                         installProgress(0.46, "Assets werden geladen… 812 von 3410 Dateien");
@@ -163,6 +178,85 @@ namespace Lumora.Setup
                 };
                 t.Start();
             };
+        }
+
+        private static readonly int DownloadRow = Engine.InstallSteps.Length;
+
+        /// Looks up the newest launcher release and its versions in the background, then unlocks "Los geht's".
+        private void Resolve()
+        {
+            ready = false;
+            resolveError = null;
+            var th = new Thread(delegate()
+            {
+                List<Version> list = null;
+                string rec = null;
+                Release rel = null;
+                string error = null;
+                try
+                {
+                    rel = Engine.Resolve(plan.Source, out list, out rec);
+                }
+                catch (Exception e)
+                {
+                    error = e.Message;
+                }
+                Ui(delegate
+                {
+                    if (error == null)
+                    {
+                        plan.Release = rel;
+                        versions = list;
+                        recommended = rec;
+                        plan.Profiles = plan.Profiles.Where(p => versions.Any(v => v.Id == p)).ToList();
+                        if (plan.Profiles.Count == 0 && recommended != null)
+                        {
+                            plan.Profiles.Add(recommended);
+                        }
+                        ready = true;
+                    }
+                    resolveError = error;
+                    ShowRelease();
+                    if (page == 0)
+                    {
+                        UpdateFooter();
+                    }
+                });
+            });
+            th.IsBackground = true;
+            th.Start();
+        }
+
+        /// Welcome chip and sidebar: which launcher version will be installed (or why not).
+        private void ShowRelease()
+        {
+            if (sideVersion != null)
+            {
+                sideVersion.Text = Engine.Version.Length > 0 ? "Lumora " + Engine.Version + " · Setup " + Program.SetupVersion : "Setup " + Program.SetupVersion;
+            }
+            if (releaseChip == null)
+            {
+                return;
+            }
+            if (resolveError != null)
+            {
+                releaseChip.Text = resolveError;
+                releaseChip.Foreground = T.Frozen(T.Mix(T.Fail, Colors.White, 0.5));
+            }
+            else if (!ready)
+            {
+                releaseChip.Text = "Suche die neueste Lumora-Version…";
+            }
+            else
+            {
+                string what = plan.Source != null ? "aus lokaler Datei" : "· " + Engine.Size(plan.Release.ExeSize) + " Download";
+                bool same = existing.Version == Engine.Version;
+                releaseChip.Text = existing.Version != null && existing.Version != "?" && !same
+                    ? "Update " + existing.Version + "  →  " + Engine.Version + "  " + what
+                    : same ? "Lumora " + Engine.Version + " ist installiert · neu installieren " + what
+                    : "Lumora " + Engine.Version + " " + what;
+                releaseChip.Foreground = T.Frozen(T.Mix(T.Accent, Colors.White, 0.45));
+            }
         }
 
         private void Defaults()
@@ -384,7 +478,9 @@ namespace Lumora.Setup
 
             var foot = new StackPanel();
             Grid.SetRow(foot, 2);
-            foot.Children.Add(T.Label("Version " + Engine.Version, 12, FontWeights.SemiBold, T.Mix(T.Muted, T.Bg, 0.1)));
+            sideVersion = T.Label("", 12, FontWeights.SemiBold, T.Mix(T.Muted, T.Bg, 0.1));
+            foot.Children.Add(sideVersion);
+            ShowRelease();
             foot.Children.Add(T.Label("Ohne Adminrechte · nur für dein Benutzerkonto", 11.5, FontWeights.Normal, T.Mix(T.Muted, T.Bg, 0.3)));
             col.Children.Add(foot);
             return col;
@@ -565,8 +661,9 @@ namespace Lumora.Setup
             switch (page)
             {
                 case 0:
-                    next.Text = existing.Version != null ? "Aktualisieren" : "Los geht's";
-                    next.SetIcon(Icons.Arrow);
+                    next.Text = resolveError != null ? "Erneut versuchen" : existing.Version != null ? "Aktualisieren" : "Los geht's";
+                    next.SetIcon(resolveError != null ? null : Icons.Arrow);
+                    next.Enabled = ready || resolveError != null;
                     break;
                 case 1:
                 case 2:
@@ -627,6 +724,16 @@ namespace Lumora.Setup
                 {
                     Go(page, 1);
                     RunInstall();
+                }
+                return;
+            }
+            if (!uninstall && page == 0 && !ready)
+            {
+                if (resolveError != null)
+                {
+                    Resolve();
+                    ShowRelease();
+                    UpdateFooter();
                 }
                 return;
             }
@@ -791,9 +898,10 @@ namespace Lumora.Setup
         private FrameworkElement WelcomePage()
         {
             StackPanel p = Column();
-            Border chip = existing.Version != null && existing.Version != "?"
-                ? Chip(existing.Version == Engine.Version ? "Version " + Engine.Version + " ist schon installiert" : "Update " + existing.Version + "  →  " + Engine.Version, T.Accent)
-                : existing.Version == "?" ? Chip("Vorhandene Installation wird aktualisiert", T.Accent) : Chip("Neu · Version " + Engine.Version, T.Accent2);
+            Border chip = Chip("", T.Accent);
+            releaseChip = (TextBlock)chip.Child;
+            releaseChip.TextWrapping = TextWrapping.Wrap;
+            ShowRelease();
             chip.Margin = new Thickness(0, 0, 0, 16);
             Stagger(chip, 0);
             p.Children.Add(chip);
@@ -982,12 +1090,12 @@ namespace Lumora.Setup
         {
             StackPanel p = Column();
             Header(p, "Wo soll Lumora hin?", "Beide Ordner kannst du frei wählen. Alles bleibt in deinem Benutzerkonto, Adminrechte brauchst du nicht.");
-            long appSize = Engine.AppSize();
+            long download = plan.Release != null ? plan.Release.ExeSize : 0;
             TextBlock dataNote = T.Label("", 12.5, FontWeights.SemiBold, T.Warn);
             Action updateNote = null;
             FrameworkElement app = PathCard(Icons.Rocket, T.Accent, "Programm", delegate { return plan.AppDir; },
                 delegate(string v) { plan.AppDir = v; }, Engine.DefaultAppDir,
-                delegate(string dir) { return "Launcher mit eigener Java-Laufzeit · " + (appSize > 0 ? Engine.Size(appSize) : "ca. 200 MB") + Free(dir); }, null);
+                delegate(string dir) { return "Launcher mit Java-Laufzeit · " + (download > 0 ? Engine.Size(download) + " Download, " : "") + "ca. " + Engine.Size(Engine.InstalledSize) + Free(dir); }, null);
             app.Margin = new Thickness(0, 0, 0, 10);
             Stagger(app, 2);
             p.Children.Add(app);
@@ -1156,7 +1264,7 @@ namespace Lumora.Setup
                     return false;
                 }
                 long free = Engine.FreeBytes(a);
-                long need = Engine.AppSize() + (50L << 20);
+                long need = Engine.InstalledSize + (plan.Release != null ? plan.Release.ExeSize : 0);
                 if (free >= 0 && free < need)
                 {
                     Dialog("Zu wenig Speicherplatz", "Auf " + IOPath.GetPathRoot(a) + " sind nur " + Engine.Size(free) + " frei, Lumora braucht " + Engine.Size(need) + ".", "OK", null, null);
@@ -1441,7 +1549,7 @@ namespace Lumora.Setup
                         skip.Visibility = Visibility.Visible;
                         skip.Enabled = true;
                         skip.Text = "Download überspringen";
-                        installRow(3, 1, "");
+                        installRow(DownloadRow, 1, "");
                     });
                     int n = plan.Profiles.Count;
                     for (int i = 0; i < n; i++)
@@ -1454,7 +1562,7 @@ namespace Lumora.Setup
                         }
                         int index = i;
                         string name = "Minecraft " + Mc(id);
-                        Ui(delegate { installRow(3, 1, n > 1 ? (index + 1) + "/" + n + " · " + name : name); });
+                        Ui(delegate { installRow(DownloadRow, 1, n > 1 ? (index + 1) + "/" + n + " · " + name : name); });
                         string err = Engine.DownloadVersion(plan.AppDir, id, delegate(double f, string detail)
                         {
                             double overall = installSpan + (1 - installSpan) * (index + Math.Max(0, Math.Min(1, f))) / n;
@@ -1470,7 +1578,7 @@ namespace Lumora.Setup
                         installDownloading = false;
                         skip.Visibility = Visibility.Collapsed;
                         bool all = notDownloaded.Count == 0;
-                        installRow(3, all ? 2 : notDownloaded.Count == n ? 4 : 2,
+                        installRow(DownloadRow, all ? 2 : notDownloaded.Count == n ? 4 : 2,
                             all ? "Fertig" : notDownloaded.Count == n ? "Beim ersten Start" : (n - notDownloaded.Count) + " von " + n);
                     });
                 }

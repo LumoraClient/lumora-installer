@@ -32,6 +32,10 @@ namespace Lumora.Setup
         public bool StartMenu = true;
         public bool Autostart;
         public bool Start = true;
+        /// Launcher release to download (GitHub), or null when Source is set.
+        public Release Release;
+        /// Local LumoraClient.exe instead of the download (offline install, tests).
+        public string Source;
     }
 
     /// What is installed already (registry, old installers, launcher settings).
@@ -80,10 +84,11 @@ namespace Lumora.Setup
         public static readonly string[] DataFolders = { "instances", "versions", "libraries", "assets", "runtime", "cache",
             "logs", "config", "auth", "addons", "diagnostics", "portable" };
 
-        public static string Version
-        {
-            get { return (Res.Text("version.txt") ?? "0.0.0").Trim(); }
-        }
+        /// Launcher version being installed (from the GitHub release, or the local LumoraClient.exe).
+        public static string Version = "";
+
+        /// Rough size of the installed launcher with its Java runtime (the download is compressed).
+        public const long InstalledSize = 230L << 20;
 
         public static string DefaultAppDir
         {
@@ -107,6 +112,49 @@ namespace Lumora.Setup
             return Path.Combine(appDir, "LumoraLauncher", "LumoraLauncher.exe");
         }
 
+        /// Newest launcher release on GitHub (null with a local source) and the Minecraft versions it offers. The version
+        /// list comes from that release's profiles.json; the list built into the setup is only a fallback.
+        public static Release Resolve(string source, out List<Version> versions, out string recommended)
+        {
+            Release rel = null;
+            string tag;
+            if (source != null)
+            {
+                if (!File.Exists(source))
+                {
+                    throw new SetupException("Datei nicht gefunden: " + source, false);
+                }
+                Version = PortableVersion(source);
+                if (Version.Length == 0)
+                {
+                    throw new SetupException(source + " ist keine Lumora-Datei (LumoraClient.exe).", false);
+                }
+                tag = "v" + Version;
+            }
+            else
+            {
+                rel = Online.Latest();
+                Version = rel.Version;
+                tag = rel.Tag;
+            }
+            try
+            {
+                var lookup = new Release();
+                lookup.Tag = tag;
+                versions = Online.Profiles(lookup, out recommended);
+            }
+            catch (Exception)
+            {
+                versions = Versions(out recommended);
+            }
+            if (versions.Count == 0)
+            {
+                throw new SetupException("Die Liste der Minecraft-Versionen ist nicht erreichbar. Bitte Internetverbindung prüfen.", true);
+            }
+            return rel;
+        }
+
+        /// Version list built into the setup (fallback when GitHub's raw files are not reachable).
         public static List<Version> Versions(out string recommended)
         {
             var list = new List<Version>();
@@ -225,29 +273,6 @@ namespace Lumora.Setup
             return e;
         }
 
-        /// Uncompressed size of the launcher (for the directory page).
-        public static long AppSize()
-        {
-            try
-            {
-                using (Stream s = Res.Open("app.zip"))
-                {
-                    if (s == null)
-                    {
-                        return 0;
-                    }
-                    using (var zip = new ZipArchive(s, ZipArchiveMode.Read))
-                    {
-                        return zip.Entries.Sum(en => en.Length);
-                    }
-                }
-            }
-            catch (Exception)
-            {
-                return 0;
-            }
-        }
-
         /// Running launcher processes (any copy: they would overwrite the new settings when they close).
         public static bool LauncherRunning(string appDir)
         {
@@ -329,32 +354,102 @@ namespace Lumora.Setup
 
         // ------------------------------------------------------------------ install
 
-        public static readonly string[] InstallSteps = { "Launcher installieren", "Verknüpfungen und Deinstallation", "Einstellungen übernehmen" };
+        public static readonly string[] InstallSteps = { "Lumora herunterladen", "Launcher installieren", "Verknüpfungen und Deinstallation", "Einstellungen übernehmen" };
 
-        /// Steps 0-2 (files, shortcuts and registry, settings hand-off). Throws SetupException.
+        /// Steps 0-3 (download, files, shortcuts and registry, settings hand-off). Throws SetupException.
         public static void Install(Plan plan, IProgress ui)
         {
             if (LauncherRunning(plan.AppDir))
             {
                 throw new SetupException("Lumora läuft noch. Bitte schließe den Launcher (auch im Tray neben der Uhr) und versuche es erneut.", true);
             }
-            ui.Step(0, "Dateien werden entpackt…");
-            Extract(plan.AppDir, ui);
-            ui.Done(0, true, null);
+            string portable;
+            if (plan.Source != null)
+            {
+                ui.Step(0, plan.Source);
+                portable = plan.Source;
+                ui.Done(0, true, "Lokale Datei");
+            }
+            else
+            {
+                ui.Step(0, "Lumora " + plan.Release.Version + " von GitHub…");
+                portable = Online.Download(plan.Release, delegate(double f, string d) { ui.Progress(f, d); });
+                ui.Done(0, true, Size(new FileInfo(portable).Length));
+            }
 
-            ui.Step(1, "Startmenü und Desktop…");
+            ui.Step(1, "Dateien werden entpackt…");
+            Extract(plan.AppDir, portable, ui);
+            ui.Done(1, true, null);
+
+            ui.Step(2, "Startmenü und Desktop…");
             string exe = LauncherExe(plan.AppDir);
             CopyUninstaller(plan.AppDir);
             Shortcuts(plan, exe);
             Register(plan, exe);
-            ui.Done(1, true, null);
-
-            ui.Step(2, "Versionen, Ordner und Design…");
-            WriteHandoff(plan);
             ui.Done(2, true, null);
+
+            ui.Step(3, "Versionen, Ordner und Design…");
+            WriteHandoff(plan);
+            ui.Done(3, true, null);
         }
 
-        private static void Extract(string appDir, IProgress ui)
+        /// The launcher's app image inside LumoraClient.exe (resource app.zip, its SHA-256 in resource version.txt;
+        /// see PortableLauncher.cs in lumora-launcher). The assembly is only loaded for reading, never run.
+        private static Stream OpenAppImage(string portable)
+        {
+            System.Reflection.Assembly asm;
+            try
+            {
+                asm = System.Reflection.Assembly.ReflectionOnlyLoadFrom(portable);
+            }
+            catch (Exception e)
+            {
+                throw new SetupException("LumoraClient.exe ist nicht lesbar (" + e.Message + ").", false);
+            }
+            Stream zip = asm.GetManifestResourceStream("app.zip");
+            Stream hash = asm.GetManifestResourceStream("version.txt");
+            if (zip == null || hash == null)
+            {
+                throw new SetupException("In LumoraClient.exe fehlt der Launcher. Ist das wirklich eine Lumora-Datei?", false);
+            }
+            string expected;
+            using (var r = new StreamReader(hash))
+            {
+                expected = r.ReadToEnd().Trim().ToLowerInvariant();
+            }
+            if (Online.Sha256(zip) != expected)
+            {
+                throw new SetupException("Der Launcher in LumoraClient.exe ist beschädigt (Prüfsumme falsch).", false);
+            }
+            zip.Position = 0;
+            return zip;
+        }
+
+        /// Launcher version inside a local LumoraClient.exe (from LumoraLauncher/app/launcher-app-<v>.jar), or "".
+        public static string PortableVersion(string portable)
+        {
+            try
+            {
+                using (Stream s = OpenAppImage(portable))
+                using (var zip = new ZipArchive(s, ZipArchiveMode.Read))
+                {
+                    foreach (ZipArchiveEntry e in zip.Entries)
+                    {
+                        var m = System.Text.RegularExpressions.Regex.Match(e.FullName.Replace('\\', '/'), "^LumoraLauncher/app/launcher-app-(.+)\\.jar$");
+                        if (m.Success)
+                        {
+                            return m.Groups[1].Value;
+                        }
+                    }
+                }
+            }
+            catch (Exception)
+            {
+            }
+            return "";
+        }
+
+        private static void Extract(string appDir, string portable, IProgress ui)
         {
             Directory.CreateDirectory(appDir);
             string staging = Path.Combine(appDir, ".setup-new");
@@ -362,12 +457,8 @@ namespace Lumora.Setup
             string target = Path.Combine(appDir, "LumoraLauncher");
             DeleteDir(staging);
             DeleteDir(old);
-            using (Stream s = Res.Open("app.zip"))
+            using (Stream s = OpenAppImage(portable))
             {
-                if (s == null)
-                {
-                    throw new SetupException("Das Setup ist beschädigt (Launcher-Dateien fehlen). Bitte lade es neu herunter.", false);
-                }
                 using (var zip = new ZipArchive(s, ZipArchiveMode.Read))
                 {
                     long total = Math.Max(1, zip.Entries.Sum(e => e.Length));
