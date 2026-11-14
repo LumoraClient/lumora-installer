@@ -82,7 +82,7 @@ namespace Lumora.Setup
         public const string Uninstaller = "Deinstallieren.exe";
         /// Folders the launcher creates in its data directory (LauncherPaths); only these are deleted on request.
         public static readonly string[] DataFolders = { "instances", "versions", "libraries", "assets", "runtime", "cache",
-            "logs", "config", "auth", "addons", "diagnostics", "portable" };
+            "logs", "config", "auth", "addons", "diagnostics", "portable", "data" };
 
         /// Launcher version being installed (from the GitHub release, or the local LumoraClient.exe).
         public static string Version = "";
@@ -95,8 +95,9 @@ namespace Lumora.Setup
             get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "LumoraClient"); }
         }
 
-        /// %APPDATA%\LumoraClient: launcher.json always lives here (LauncherPaths.defaultRoot).
-        public static string DefaultDataDir
+        /// %APPDATA%\LumoraClient: launcher.json always lives here (LauncherPaths.defaultRoot), and so do the data of
+        /// installations from before the standard folder (launcher 0.3.42).
+        public static string ConfigRoot
         {
             get
             {
@@ -104,6 +105,20 @@ namespace Lumora.Setup
                 string home = Environment.GetEnvironmentVariable("LUMORA_HOME");
                 return !string.IsNullOrWhiteSpace(home) ? Path.GetFullPath(home).TrimEnd('\\')
                     : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "LumoraClient");
+            }
+        }
+
+        /// Data directory of a new installation: next to Minecraft's own folder (.minecraft\LumoraClient), where the
+        /// versions play by default (InstanceLayout in the launcher). With LUMORA_HOME: LUMORA_HOME\minecraft\LumoraClient,
+        /// the same as the launcher, so a test never touches the real .minecraft.
+        public static string DefaultDataDir
+        {
+            get
+            {
+                string home = Environment.GetEnvironmentVariable("LUMORA_HOME");
+                string minecraft = !string.IsNullOrWhiteSpace(home) ? Path.Combine(Path.GetFullPath(home).TrimEnd('\\'), "minecraft")
+                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft");
+                return Path.Combine(minecraft, "LumoraClient");
             }
         }
 
@@ -241,7 +256,7 @@ namespace Lumora.Setup
             // launcher settings: data directory and version filter chosen in the launcher
             try
             {
-                string file = Path.Combine(DefaultDataDir, "config", "launcher.json");
+                string file = Path.Combine(ConfigRoot, "config", "launcher.json");
                 if (File.Exists(file))
                 {
                     e.HasData = true;
@@ -253,6 +268,11 @@ namespace Lumora.Setup
                         if (cfg.TryGetValue("installDir", out dir) && dir is string && ((string)dir).Length > 0)
                         {
                             e.DataDir = (string)dir;
+                        }
+                        else if (e.DataDir == null)
+                        {
+                            // installed before the standard folder: the data stay where they are
+                            e.DataDir = ConfigRoot;
                         }
                         object vis;
                         if (e.Profiles == null && cfg.TryGetValue("visibleProfiles", out vis) && vis is object[] && ((object[])vis).Length > 0)
@@ -662,9 +682,10 @@ namespace Lumora.Setup
         /// config/setup.json for the launcher (dev.lumora.launcher.core.config.SetupHandoff).
         private static void WriteHandoff(Plan plan)
         {
-            string dir = Path.Combine(DefaultDataDir, "config");
+            string dir = Path.Combine(ConfigRoot, "config");
             Directory.CreateDirectory(dir);
-            bool defaultData = string.Equals(Path.GetFullPath(plan.DataDir).TrimEnd('\\'), DefaultDataDir.TrimEnd('\\'),
+            // "" = the launcher's own folder (ConfigRoot); any other folder is passed on, also the new default
+            bool defaultData = string.Equals(Path.GetFullPath(plan.DataDir).TrimEnd('\\'), ConfigRoot.TrimEnd('\\'),
                 StringComparison.OrdinalIgnoreCase);
             if (!defaultData)
             {
@@ -842,7 +863,7 @@ namespace Lumora.Setup
             if (purge)
             {
                 ui.Step(3, "Welten, Einstellungen, Anmeldung…");
-                foreach (string dir in new[] { dataDir, DefaultDataDir }.Where(d => !string.IsNullOrEmpty(d)).Distinct(StringComparer.OrdinalIgnoreCase))
+                foreach (string dir in new[] { dataDir, ConfigRoot }.Where(d => !string.IsNullOrEmpty(d)).Distinct(StringComparer.OrdinalIgnoreCase))
                 {
                     PurgeData(dir);
                 }
@@ -871,7 +892,7 @@ namespace Lumora.Setup
         public static long DataSize(string dataDir)
         {
             long total = 0;
-            foreach (string dir in new[] { dataDir, DefaultDataDir }.Where(d => !string.IsNullOrEmpty(d)).Distinct(StringComparer.OrdinalIgnoreCase))
+            foreach (string dir in new[] { dataDir, ConfigRoot }.Where(d => !string.IsNullOrEmpty(d)).Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 foreach (string name in DataFolders)
                 {

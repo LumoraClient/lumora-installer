@@ -1101,12 +1101,12 @@ namespace Lumora.Setup
             p.Children.Add(app);
             FrameworkElement data = PathCard(Icons.Folder, T.Accent2, "Spieldaten", delegate { return plan.DataDir; },
                 delegate(string v) { plan.DataDir = v; if (updateNote != null) { updateNote(); } }, Engine.DefaultDataDir,
-                delegate(string dir) { return "Minecraft, Welten, Screenshots und Addons" + Free(dir); }, null);
+                delegate(string dir) { return "Bibliotheken, Lumora-Einstellungen, Addons und eigene Instanzen · gespielt wird in .minecraft" + Free(dir); }, null);
             Stagger(data, 3);
             p.Children.Add(data);
             dataNote.Margin = new Thickness(2, 8, 0, 0);
             p.Children.Add(dataNote);
-            string oldData = existing.DataDir ?? (existing.HasData ? Engine.DefaultDataDir : null);
+            string oldData = existing.DataDir ?? (existing.HasData ? Engine.ConfigRoot : null);
             updateNote = delegate
             {
                 bool moved = oldData != null && Directory.Exists(oldData)
@@ -1840,7 +1840,7 @@ namespace Lumora.Setup
             purgeInfo = T.Label("Größe wird berechnet…", 12, FontWeights.SemiBold, T.Muted);
             string data = existing.DataDir ?? Engine.DefaultDataDir;
             Grid row = OptionRow(Icons.Trash, T.Fail, "Auch Spieldaten löschen",
-                "Welten, Screenshots, Einstellungen, Addons und die Anmeldung in " + data + ". Das lässt sich nicht rückgängig machen.", danger);
+                "Eigene Instanzen mit ihren Welten, Einstellungen, Addons und die Anmeldung in " + data + ". Der Minecraft-Ordner .minecraft bleibt. Das lässt sich nicht rückgängig machen.", danger);
             var col = Column();
             col.Children.Add(row);
             purgeInfo.Margin = new Thickness(52, 6, 0, 0);

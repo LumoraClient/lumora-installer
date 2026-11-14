@@ -15,7 +15,8 @@ gebaut werden, wenn sich der Installer selbst ändert.
 2. **Versionen**: Minecraft-Versionen frei wählen (Empfohlen / Alle / Keine), optional gleich herunterladen.
    Die Liste kommt aus `profiles.json` genau des Releases, das installiert wird.
 3. **Speicherorte**: Programmordner (Standard `%LOCALAPPDATA%\Programs\LumoraClient`) und Spieldaten
-   (Standard `%APPDATA%\LumoraClient`), Desktop- und Startmenü-Verknüpfung, Mit Windows starten.
+   (Standard bei einer Neuinstallation `%APPDATA%\.minecraft\LumoraClient` wie bei anderen Clients, ab Launcher
+   0.3.42; eine bestehende Installation behält ihren Ordner), Desktop- und Startmenü-Verknüpfung, Mit Windows starten.
 4. **Design**: Lumora Theme oder klassisch im Minecraft Style (gilt für die Menüs im Spiel).
 5. **Installation**: Lumora herunterladen, Launcher installieren, Verknüpfungen, Einstellungen übernehmen und
    (optional) die gewählten Minecraft-Versionen laden. Den Versions-Download kann man überspringen; dann lädt der
