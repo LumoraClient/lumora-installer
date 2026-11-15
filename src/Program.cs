@@ -1,6 +1,7 @@
-// Lumora Setup - entry point. One source, two programs:
+// Lumora Setup - entry point. One program, two roles:
 //   LumoraClient-Setup.exe   wizard; downloads the newest launcher from GitHub Releases (lumora-launcher)
-//   Deinstallieren.exe       same window in uninstall mode (compiled with /define:UNINSTALLER)
+//   Deinstallieren.exe       a copy of the setup in the program folder; under this name (or with --uninstall) it shows
+//                            the same window in uninstall mode
 //
 // Command line (both): /S or --silent runs without a window. Setup: --dir=<programm> --data=<spieldaten>
 // --versions=26.1.2,1.8.9 --theme=lumora|vanilla --download --no-desktop --no-startmenu --start
@@ -8,7 +9,6 @@
 // Uninstaller: --purge also deletes the game data. Exit code 0 = success. Log: %TEMP%\LumoraSetup.log
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -19,16 +19,14 @@ using System.Windows;
 [assembly: AssemblyProduct("Lumora Client")]
 [assembly: AssemblyDescription("Lumora Client installer")]
 [assembly: AssemblyCompany("Lumora Client contributors")]
+[assembly: AssemblyCopyright("Copyright © 2026 Lumora Client contributors, GPL-3.0-or-later")]
 
 namespace Lumora.Setup
 {
     internal static class Program
     {
-#if UNINSTALLER
-        private static readonly bool IsUninstaller = true;
-#else
-        private static readonly bool IsUninstaller = false;
-#endif
+        /// Path of this program (the setup, or its copy Deinstallieren.exe in the program folder).
+        public static readonly string Self = Assembly.GetExecutingAssembly().Location;
 
         /// Version of this setup program (resource version.txt, set by build.ps1).
         public static readonly string SetupVersion = (Res.Text("version.txt") ?? "dev").Trim();
@@ -47,34 +45,15 @@ namespace Lumora.Setup
             bool silent = a.Any(x => x == "/S" || x == "/s" || x == "--silent");
             try
             {
-                if (IsUninstaller)
+                Engine.CleanLeftovers();
+                bool uninstaller = a.Contains("--uninstall")
+                    || string.Equals(Path.GetFileName(Self), Engine.Uninstaller, StringComparison.OrdinalIgnoreCase);
+                if (uninstaller)
                 {
-                    string app = Option(a, "--app") ?? Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-                    // the uninstaller deletes its own folder: run a copy from %TEMP% that removes itself afterwards
-                    if (!a.Contains("--relocated"))
-                    {
-                        string copy = Path.Combine(Path.GetTempPath(), "LumoraUninstall-" + DateTime.Now.Ticks + ".exe");
-                        File.Copy(Assembly.GetExecutingAssembly().Location, copy, true);
-                        var rest = args.Where(x => !x.StartsWith("--app=")).Select(x => "\"" + x + "\"");
-                        var psi = new ProcessStartInfo(copy, "--relocated \"--app=" + app + "\" " + string.Join(" ", rest));
-                        psi.UseShellExecute = false;
-                        psi.WorkingDirectory = Path.GetTempPath();
-                        Process p = Process.Start(psi);
-                        if (silent)
-                        {
-                            p.WaitForExit();
-                            return p.ExitCode;
-                        }
-                        return 0;
-                    }
-                    try
-                    {
-                        return silent ? SilentUninstall(app, a.Contains("--purge")) : RunUi(true, app, a);
-                    }
-                    finally
-                    {
-                        DeleteSelfLater(app);
-                    }
+                    string app = Option(a, "--app") ?? Path.GetDirectoryName(Self);
+                    // not inside the program folder, so it can be removed at the end
+                    Environment.CurrentDirectory = Path.GetTempPath();
+                    return silent ? SilentUninstall(app, a.Contains("--purge")) : RunUi(true, app, a);
                 }
                 bool created;
                 using (var mutex = new Mutex(true, "Local\\LumoraClientSetup", out created))
@@ -226,30 +205,6 @@ namespace Lumora.Setup
             {
                 File.AppendAllText(Path.Combine(Path.GetTempPath(), "LumoraSetup.log"),
                     DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " " + line + Environment.NewLine);
-            }
-            catch (Exception)
-            {
-            }
-        }
-
-        /// The relocated uninstaller copy in %TEMP% deletes itself once this process has ended.
-        /// The original uninstaller may still have been running (silent mode waits for this copy), so its file and the
-        /// then empty program folder go too, unless Lumora is installed there (again).
-        private static void DeleteSelfLater(string app)
-        {
-            try
-            {
-                string me = Assembly.GetExecutingAssembly().Location;
-                string cmd = "/c ping -n 3 127.0.0.1 >nul & del /f /q \"" + me + "\"";
-                if (!string.IsNullOrEmpty(app) && !Directory.Exists(Path.Combine(app, "LumoraLauncher")))
-                {
-                    cmd += " & del /f /q \"" + Path.Combine(app, Engine.Uninstaller) + "\" & rmdir \"" + app + "\" 2>nul";
-                }
-                var psi = new ProcessStartInfo("cmd.exe", cmd);
-                psi.CreateNoWindow = true;
-                psi.UseShellExecute = false;
-                psi.WindowStyle = ProcessWindowStyle.Hidden;
-                Process.Start(psi);
             }
             catch (Exception)
             {

@@ -140,7 +140,8 @@ namespace Lumora.Setup
             }
             string dir = Path.Combine(Path.GetTempPath(), "lumora-setup");
             Directory.CreateDirectory(dir);
-            string target = Path.Combine(dir, "LumoraClient-" + rel.Version + ".exe");
+            // stored as .bin: the setup only reads the file (PeResources), it never runs it
+            string target = Path.Combine(dir, "LumoraClient-" + rel.Version + ".bin");
             if (File.Exists(target) && Sha256(target) == expected)
             {
                 progress(1, "Schon heruntergeladen");

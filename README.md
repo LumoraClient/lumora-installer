@@ -4,7 +4,7 @@ Windows-Installer für den [Lumora Client](https://github.com/LumoraClient/lumor
 Installations-Assistent im Look des Launchers (blaues Design, Nachtlandschaft mit Polarlicht, fließende Knöpfe,
 weiche Seitenübergänge).
 
-Der Installer ist **unabhängig vom Launcher**: `LumoraClient-Setup.exe` (ca. 5 MB) enthält den Launcher nicht,
+Der Installer ist **unabhängig vom Launcher**: `LumoraClient-Setup.exe` (ca. 3 MB) enthält den Launcher nicht,
 sondern lädt beim Installieren immer die neueste Version aus den
 [Releases von lumora-launcher](https://github.com/LumoraClient/lumora-launcher/releases). Er muss deshalb nur neu
 gebaut werden, wenn sich der Installer selbst ändert.
@@ -24,7 +24,10 @@ gebaut werden, wenn sich der Installer selbst ändert.
 6. **Fertig**: Lumora starten.
 
 Installiert wird ohne Adminrechte, nur für das eigene Benutzerkonto, mit Eintrag unter Windows-Einstellungen › Apps.
-`Deinstallieren.exe` (gleicher Look) entfernt Launcher, Verknüpfungen und Einträge; Spieldaten nur auf Wunsch.
+`Deinstallieren.exe` (gleicher Look) entfernt Launcher, Verknüpfungen und Einträge; Spieldaten nur auf Wunsch. Es ist
+eine Kopie des Setups, die unter diesem Namen (oder mit `--uninstall`) im Deinstallationsmodus startet. Zum Schluss
+verschiebt es sich selbst als `.old` nach `%TEMP%`, damit der Programmordner ganz verschwindet; der nächste Start des
+Setups räumt die Datei weg. Kein Hilfsprozess, kein `cmd.exe`, keine PowerShell.
 
 ## Sicherheit beim Download
 
@@ -32,7 +35,8 @@ Wie beim Selbst-Update des Launchers (`LauncherUpdate`): Das Release muss `Lumor
 `SHA256SUMS.txt.sig` enthalten. Der Installer prüft die **Ed25519-Signatur** der Prüfsummenliste mit dem
 öffentlichen Release-Schlüssel des Launchers (fest im Installer), dann den **SHA-256** der heruntergeladenen EXE und
 zuletzt den SHA-256 des darin eingebetteten Launcher-Pakets. Erst dann wird entpackt; die EXE selbst wird nie
-ausgeführt, nur gelesen. Die Prüfung ist eine eigene Ed25519-Implementierung nach RFC 8032 (`src/Online.cs`), weil
+ausgeführt und auch nicht als .NET-Assembly geladen: `src/PeResources.cs` liest das Paket direkt aus der Datei
+(PE-Header, CLI-Header, Metadaten-Tabelle ManifestResource). Die Prüfung ist eine eigene Ed25519-Implementierung nach RFC 8032 (`src/Online.cs`), weil
 das .NET Framework 4.8 kein Ed25519 kennt.
 
 ## Übergabe an den Launcher
@@ -82,15 +86,17 @@ Testordner zählen).
 
 | Datei | Inhalt |
 |---|---|
-| `src/Program.cs` | Einstieg, stille Modi, Deinstallation aus einer Kopie in `%TEMP%` |
+| `src/Program.cs` | Einstieg, stille Modi, Rolle Setup oder Deinstallation (nach Dateiname) |
 | `src/Wizard.cs` | Fenster, Schrittleiste, Seiten, Übergänge, Dialoge |
 | `src/Scene.cs` | animierter Hintergrund und die Design-Vorschauen (selbst gezeichnet, keine Spiel-Grafiken) |
 | `src/Ui.cs` | Farben, Schrift, Icons, Knöpfe, Schalter, Fortschrittsbalken |
 | `src/Online.cs` | GitHub-Release, Versionsliste, Download, Ed25519- und SHA-256-Prüfung |
+| `src/PeResources.cs` | liest `app.zip`/`version.txt` aus LumoraClient.exe, ohne die Datei zu laden |
 | `src/Engine.cs` | Installieren (Entpacken mit Rollback, Registry, Verknüpfungen, Übergabe, Downloads), Deinstallieren |
 | `src/Native.cs` | Ordnerauswahl (IFileOpenDialog), Verknüpfungen (IShellLink), Fensterrahmen (DWM) |
 | `assets/fonts` | Inter (SIL Open Font License 1.1, `OFL-Inter.txt`) |
-| `build.ps1` | Build |
+| `assets/app.manifest` | Manifest: `asInvoker` (nie Adminrechte), unterstützte Windows-Versionen |
+| `build.ps1` | Build (setzt auch Dateiversion und Manifest-Version aus `-Version`) |
 
 ## Lizenz
 

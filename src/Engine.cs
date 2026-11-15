@@ -414,22 +414,30 @@ namespace Lumora.Setup
         }
 
         /// The launcher's app image inside LumoraClient.exe (resource app.zip, its SHA-256 in resource version.txt;
-        /// see PortableLauncher.cs in lumora-launcher). The assembly is only loaded for reading, never run.
+        /// see PortableLauncher.cs in lumora-launcher). The file is only read as bytes (PeResources): never loaded as an
+        /// assembly and never run.
         private static Stream OpenAppImage(string portable)
         {
-            System.Reflection.Assembly asm;
+            Stream zip, hash;
             try
             {
-                asm = System.Reflection.Assembly.ReflectionOnlyLoadFrom(portable);
+                zip = PeResources.Open(portable, "app.zip");
+                hash = PeResources.Open(portable, "version.txt");
             }
             catch (Exception e)
             {
                 throw new SetupException("LumoraClient.exe ist nicht lesbar (" + e.Message + ").", false);
             }
-            Stream zip = asm.GetManifestResourceStream("app.zip");
-            Stream hash = asm.GetManifestResourceStream("version.txt");
             if (zip == null || hash == null)
             {
+                if (zip != null)
+                {
+                    zip.Dispose();
+                }
+                if (hash != null)
+                {
+                    hash.Dispose();
+                }
                 throw new SetupException("In LumoraClient.exe fehlt der Launcher. Ist das wirklich eine Lumora-Datei?", false);
             }
             string expected;
@@ -439,6 +447,7 @@ namespace Lumora.Setup
             }
             if (Online.Sha256(zip) != expected)
             {
+                zip.Dispose();
                 throw new SetupException("Der Launcher in LumoraClient.exe ist beschädigt (Prüfsumme falsch).", false);
             }
             zip.Position = 0;
@@ -571,19 +580,72 @@ namespace Lumora.Setup
             }
         }
 
+        /// The uninstaller is a copy of this setup (it switches to uninstall mode by its name), like with Inno Setup:
+        /// no second program packed into the setup.
         private static void CopyUninstaller(string appDir)
         {
-            using (Stream s = Res.Open("uninstall.exe"))
+            string target = Path.Combine(appDir, Uninstaller);
+            if (!SamePath(target, Program.Self))
             {
-                if (s == null)
+                File.Copy(Program.Self, target, true);
+            }
+        }
+
+        private static bool SamePath(string a, string b)
+        {
+            return string.Equals(Path.GetFullPath(a).TrimEnd('\\'), Path.GetFullPath(b).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private const string LeftoverPrefix = "LumoraUninstall-";
+
+        /// Removes what earlier runs left in %TEMP%: the moved uninstaller (see RemoveUninstaller), copies of older setup
+        /// versions and launcher downloads stored as .exe. Files still in use stay.
+        public static void CleanLeftovers()
+        {
+            try
+            {
+                string temp = Path.GetTempPath();
+                foreach (string f in Directory.GetFiles(temp, LeftoverPrefix + "*.old").Concat(Directory.GetFiles(temp, LeftoverPrefix + "*.exe")))
                 {
-                    return; // development build without uninstaller
+                    TryDelete(f);
                 }
-                string target = Path.Combine(appDir, Uninstaller);
-                using (FileStream f = File.Create(target))
+                string cache = Path.Combine(temp, "lumora-setup");
+                if (Directory.Exists(cache))
                 {
-                    s.CopyTo(f);
+                    foreach (string f in Directory.GetFiles(cache, "LumoraClient-*.exe"))
+                    {
+                        TryDelete(f);
+                    }
                 }
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        /// Deletes Deinstallieren.exe. If that is the running program, it cannot be deleted, but it can be moved on the
+        /// same drive: it goes to %TEMP% (as .old, it is not run from there) and the next start of the setup or Windows'
+        /// temp cleanup removes it. No helper process and no command line. Returns false if it had to stay.
+        private static bool RemoveUninstaller(string appDir)
+        {
+            string own = Path.Combine(appDir, Uninstaller);
+            if (!File.Exists(own))
+            {
+                return true;
+            }
+            if (!SamePath(own, Program.Self))
+            {
+                TryDelete(own);
+                return !File.Exists(own);
+            }
+            try
+            {
+                File.Move(own, Path.Combine(Path.GetTempPath(), LeftoverPrefix + DateTime.Now.Ticks + ".old"));
+                return true;
+            }
+            catch (Exception)
+            {
+                return false; // %TEMP% on another drive
             }
         }
 
@@ -852,13 +914,14 @@ namespace Lumora.Setup
             ui.Step(2, appDir);
             string launcher = Path.Combine(appDir, "LumoraLauncher");
             DeleteDir(launcher);
-            TryDelete(Path.Combine(appDir, Uninstaller));
             foreach (string leftover in new[] { ".setup-new", ".setup-old" })
             {
                 DeleteDir(Path.Combine(appDir, leftover));
             }
+            bool uninstallerGone = RemoveUninstaller(appDir);
             TryDeleteEmpty(appDir);
-            ui.Done(2, !Directory.Exists(launcher), Directory.Exists(launcher) ? "Einige Dateien waren gesperrt." : null);
+            ui.Done(2, !Directory.Exists(launcher), Directory.Exists(launcher) ? "Einige Dateien waren gesperrt."
+                : uninstallerGone ? null : Uninstaller + " bleibt im Ordner, du kannst ihn löschen.");
 
             if (purge)
             {
